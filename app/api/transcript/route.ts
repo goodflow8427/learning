@@ -13,6 +13,7 @@ interface Segment {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const videoId = searchParams.get("v");
+  const debug = searchParams.get("debug") === "1";
 
   if (!videoId || !VIDEO_ID_RE.test(videoId)) {
     return NextResponse.json(
@@ -23,28 +24,49 @@ export async function GET(request: Request) {
 
   const apiKey = process.env.SUPADATA_API_KEY;
   if (!apiKey) {
-    // The env var isn't set on the server.
     return NextResponse.json(
-      { available: false, reason: "fetch_failed" },
+      debug
+        ? { debug: true, error: "SUPADATA_API_KEY is not set on the server" }
+        : { available: false, reason: "fetch_failed" },
       { status: 500 },
     );
   }
 
   try {
+    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const res = await fetch(
-      `https://api.supadata.ai/v1/youtube/transcript?videoId=${videoId}`,
+      `https://api.supadata.ai/v1/youtube/transcript?url=${encodeURIComponent(ytUrl)}`,
       { headers: { "x-api-key": apiKey } },
     );
 
-    if (!res.ok) {
-      // 404 / not-available → treat as "no captions"; other errors → failure.
+    const rawText = await res.text();
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = null;
+    }
+
+    if (debug) {
       return NextResponse.json({
-        available: false,
-        reason: res.status === 404 || res.status === 206 ? "no_captions" : "fetch_failed",
+        debug: true,
+        status: res.status,
+        ok: res.ok,
+        body: parsed ?? rawText.slice(0, 2000),
       });
     }
 
-    const data = (await res.json()) as {
+    if (!res.ok) {
+      return NextResponse.json({
+        available: false,
+        reason:
+          res.status === 404 || res.status === 206
+            ? "no_captions"
+            : "fetch_failed",
+      });
+    }
+
+    const data = (parsed ?? {}) as {
       lang?: string;
       content?: { text?: string; offset?: number; start?: number }[];
     };
@@ -68,9 +90,11 @@ export async function GET(request: Request) {
       language: data.lang ?? "",
       segments,
     });
-  } catch {
+  } catch (e) {
     return NextResponse.json(
-      { available: false, reason: "fetch_failed" },
+      debug
+        ? { debug: true, error: String(e) }
+        : { available: false, reason: "fetch_failed" },
       { status: 502 },
     );
   }
