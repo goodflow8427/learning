@@ -13,7 +13,6 @@ interface Segment {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const videoId = searchParams.get("v");
-  const debug = searchParams.get("debug") === "1";
 
   if (!videoId || !VIDEO_ID_RE.test(videoId)) {
     return NextResponse.json(
@@ -25,9 +24,7 @@ export async function GET(request: Request) {
   const apiKey = process.env.SUPADATA_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
-      debug
-        ? { debug: true, error: "SUPADATA_API_KEY is not set on the server" }
-        : { available: false, reason: "fetch_failed" },
+      { available: false, reason: "fetch_failed" },
       { status: 500 },
     );
   }
@@ -39,23 +36,6 @@ export async function GET(request: Request) {
       { headers: { "x-api-key": apiKey } },
     );
 
-    const rawText = await res.text();
-    let parsed: unknown = null;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      parsed = null;
-    }
-
-    if (debug) {
-      return NextResponse.json({
-        debug: true,
-        status: res.status,
-        ok: res.ok,
-        body: parsed ?? rawText.slice(0, 2000),
-      });
-    }
-
     if (!res.ok) {
       return NextResponse.json({
         available: false,
@@ -66,7 +46,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const data = (parsed ?? {}) as {
+    const data = (await res.json()) as {
       lang?: string;
       content?: { text?: string; offset?: number; start?: number }[];
     };
@@ -90,11 +70,9 @@ export async function GET(request: Request) {
       language: data.lang ?? "",
       segments,
     });
-  } catch (e) {
+  } catch {
     return NextResponse.json(
-      debug
-        ? { debug: true, error: String(e) }
-        : { available: false, reason: "fetch_failed" },
+      { available: false, reason: "fetch_failed" },
       { status: 502 },
     );
   }
