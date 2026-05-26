@@ -38,20 +38,69 @@ function extractYouTubeId(input: string): string | null {
   return null;
 }
 
+function formatTime(sec: number): string {
+  const total = Math.floor(sec);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+interface Segment {
+  start: number;
+  text: string;
+}
+
+type TranscriptState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; segments: Segment[]; language: string }
+  | { status: "empty" }
+  | { status: "error" };
+
 export default function Home() {
   const [urlInput, setUrlInput] = useState("");
   const [videoId, setVideoId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptState>({
+    status: "idle",
+  });
+  const [transcriptOpen, setTranscriptOpen] = useState(true);
+
+  async function fetchTranscript(id: string) {
+    setTranscript({ status: "loading" });
+    try {
+      const res = await fetch(`/api/transcript?v=${id}`);
+      const data = await res.json();
+      if (data.available && Array.isArray(data.segments)) {
+        setTranscript({
+          status: "ready",
+          segments: data.segments,
+          language: data.language ?? "",
+        });
+      } else if (data.reason === "fetch_failed") {
+        setTranscript({ status: "error" });
+      } else {
+        setTranscript({ status: "empty" });
+      }
+    } catch {
+      setTranscript({ status: "error" });
+    }
+  }
 
   function handleLoad() {
     const id = extractYouTubeId(urlInput);
     if (!id) {
       setVideoId(null);
+      setTranscript({ status: "idle" });
       setError("올바른 유튜브 영상 URL을 입력해 주세요.");
       return;
     }
     setError(null);
     setVideoId(id);
+    setTranscriptOpen(true);
+    fetchTranscript(id);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -111,6 +160,57 @@ export default function Home() {
           </div>
         </aside>
       </div>
+
+      {videoId && (
+        <section className={styles.transcriptPanel}>
+          <button
+            className={styles.transcriptHeader}
+            onClick={() => setTranscriptOpen((v) => !v)}
+            aria-expanded={transcriptOpen}
+          >
+            <span>
+              자막
+              {transcript.status === "ready" && transcript.language
+                ? ` · ${transcript.language}`
+                : ""}
+            </span>
+            <span className={styles.chevron}>{transcriptOpen ? "▾" : "▸"}</span>
+          </button>
+
+          {transcriptOpen && (
+            <div className={styles.transcriptBody}>
+              {transcript.status === "loading" && (
+                <p className={styles.transcriptHint}>자막을 가져오는 중…</p>
+              )}
+
+              {transcript.status === "empty" && (
+                <p className={styles.transcriptHint}>
+                  이 영상은 자막이 없어서 지원하지 않아요.
+                </p>
+              )}
+
+              {transcript.status === "error" && (
+                <p className={styles.transcriptHint}>
+                  자막을 가져오지 못했어요. 잠시 후 다시 시도해 주세요.
+                </p>
+              )}
+
+              {transcript.status === "ready" && (
+                <ol className={styles.transcriptList}>
+                  {transcript.segments.map((seg, i) => (
+                    <li key={i} className={styles.transcriptItem}>
+                      <span className={styles.timestamp}>
+                        {formatTime(seg.start)}
+                      </span>
+                      <span className={styles.segmentText}>{seg.text}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
+        </section>
+      )}
     </main>
   );
 }
